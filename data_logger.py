@@ -60,10 +60,20 @@ def init_db():
                 message     TEXT    NOT NULL
             );
 
+            -- Weight tracking. Stored canonically in grams; converted to
+            -- the user's configured unit at the API layer. Never purged.
+            CREATE TABLE IF NOT EXISTS weight_readings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts          TEXT    NOT NULL,
+                weight_g    REAL    NOT NULL,
+                note        TEXT    DEFAULT ''
+            );
+
             CREATE INDEX IF NOT EXISTS idx_readings_ts  ON sensor_readings(ts);
             CREATE INDEX IF NOT EXISTS idx_weather_ts   ON weather_readings(ts);
             CREATE INDEX IF NOT EXISTS idx_events_ts    ON relay_events(ts);
             CREATE INDEX IF NOT EXISTS idx_sysevents_ts ON system_events(ts);
+            CREATE INDEX IF NOT EXISTS idx_weight_ts    ON weight_readings(ts);
         """)
     logger.info("Database initialised at %s", DB_PATH)
 
@@ -222,6 +232,30 @@ class DataLogger:
         combined = [dict(r) for r in relay_rows] + [dict(r) for r in sys_rows]
         combined.sort(key=lambda r: r["ts"], reverse=True)
         return combined
+
+    # ------------------------------------------------------------------
+    # Weight tracking
+    # ------------------------------------------------------------------
+
+    def log_weight(self, weight_g: float, note: str = ""):
+        """Persist a gecko weight reading (canonical unit: grams)."""
+        ts = datetime.utcnow().isoformat()
+        with _conn() as con:
+            con.execute(
+                "INSERT INTO weight_readings (ts, weight_g, note) VALUES (?,?,?)",
+                (ts, float(weight_g), note or "")
+            )
+        logger.info("Weight logged: %.2fg %s", weight_g, note or "")
+
+    def get_weight_readings(self, limit: int = 500) -> list[dict]:
+        """Return all weight readings in chronological order (oldest first)."""
+        with _conn() as con:
+            rows = con.execute(
+                "SELECT ts, weight_g, note FROM weight_readings "
+                "ORDER BY ts ASC LIMIT ?",
+                (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_weather_readings(self, hours: int = 24) -> list[dict]:
         since = (datetime.utcnow() - timedelta(hours=hours)).isoformat()

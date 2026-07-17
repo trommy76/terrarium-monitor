@@ -6,4 +6,4 @@ bumped on every change set. Read in:
   - any future status / about endpoint
 """
 
-__version__ = "1.0.110"
+__version__ = "1.0.111"

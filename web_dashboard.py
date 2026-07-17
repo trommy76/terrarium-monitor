@@ -548,6 +548,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div id="care-confirm" style="margin-top:.5rem;font-size:.85rem;color:#50a0ff;min-height:1.4em"></div>
 </div>
 
+<div id="weight-wrap" style="display:none">
+  <div class="section-title">⚖️ Weight Log</div>
+  <div style="background:var(--card);border-radius:12px;padding:1rem;margin-bottom:1rem">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.6rem">
+      <input id="weight-input" type="number" step="0.1" min="0"
+        placeholder="Weight" inputmode="decimal"
+        style="width:110px;padding:.4rem .7rem;background:#0a0a20;border:1px solid #22224a;
+               border-radius:8px;color:var(--text);font-size:.9rem">
+      <span id="weight-unit-label" style="color:var(--grey);font-size:.85rem">g</span>
+      <input id="weight-note" type="text" placeholder="Optional note (e.g. before feeding, after shed)..."
+        style="flex:1;min-width:180px;padding:.4rem .7rem;background:#0a0a20;border:1px solid #22224a;
+               border-radius:8px;color:var(--text);font-size:.9rem">
+      <button onclick="logWeight()"
+        style="background:#4ecdc4;color:#000;white-space:nowrap;border:0">Log Weight</button>
+    </div>
+    <div id="weight-confirm" style="margin-bottom:.5rem;font-size:.85rem;color:#4ecdc4;min-height:1.4em"></div>
+    <div id="weight-latest" style="color:var(--grey);font-size:.85rem;margin-bottom:.4rem"></div>
+    <div style="max-height:220px">
+      <canvas id="weight-chart"></canvas>
+    </div>
+  </div>
+</div>
+
 <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
   <span>Event Log</span>
   <button onclick="clearLog()"
@@ -978,6 +1001,94 @@ async function logCustomFeed(){
   await logFeed(note);
 }
 
+// -------- Weight tracking --------
+let weightChartInst = null;
+let weightUnit = 'g';
+
+async function initWeightSection(){
+  try {
+    const r = await fetch('/api/weight/enabled');
+    const d = await r.json();
+    if(!d.enabled){
+      document.getElementById('weight-wrap').style.display = 'none';
+      return;
+    }
+    weightUnit = d.unit || 'g';
+    document.getElementById('weight-unit-label').textContent = weightUnit;
+    document.getElementById('weight-input').placeholder = `Weight`;
+    document.getElementById('weight-wrap').style.display = 'block';
+    await loadWeightChart();
+  } catch(e){ console.error('initWeightSection error:', e); }
+}
+
+async function logWeight(){
+  const raw = document.getElementById('weight-input').value.trim();
+  const weight = parseFloat(raw);
+  if(isNaN(weight) || weight <= 0){
+    alert('Enter a valid positive weight.');
+    return;
+  }
+  const note = document.getElementById('weight-note').value.trim();
+  const r = await fetch('/api/weight/log', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({weight, note})
+  });
+  const d = await r.json();
+  const confirm = document.getElementById('weight-confirm');
+  confirm.textContent = d.ok ? `✅ Logged: ${d.message}` : `❌ ${d.error}`;
+  document.getElementById('weight-input').value = '';
+  document.getElementById('weight-note').value = '';
+  setTimeout(()=>{ confirm.textContent=''; }, 4000);
+  await loadWeightChart();
+  refresh();  // refresh main event log so this new entry appears
+}
+
+async function loadWeightChart(){
+  try {
+    const r = await fetch('/api/weight/history');
+    const d = await r.json();
+    weightUnit = d.unit || weightUnit;
+    document.getElementById('weight-unit-label').textContent = weightUnit;
+    const latest = d.readings && d.readings.length ? d.readings[d.readings.length - 1] : null;
+    const latestEl = document.getElementById('weight-latest');
+    if(!d.readings || !d.readings.length){
+      latestEl.textContent = 'No weights logged yet — enter one above to get started.';
+      if(weightChartInst){ weightChartInst.destroy(); weightChartInst = null; }
+      return;
+    }
+    latestEl.textContent = `Latest: ${latest.weight}${d.unit} on ${latest.ts_local}` +
+      (latest.note ? ` — ${latest.note}` : '') +
+      `  ·  ${d.readings.length} reading${d.readings.length === 1 ? '' : 's'}`;
+    const labels = d.readings.map(r => r.ts_local);
+    const values = d.readings.map(r => r.weight);
+    if(weightChartInst) weightChartInst.destroy();
+    const ctx = document.getElementById('weight-chart').getContext('2d');
+    weightChartInst = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets: [{
+        label: `Weight (${d.unit})`,
+        data: values,
+        borderColor: '#4ecdc4',
+        backgroundColor: 'rgba(78,205,196,0.12)',
+        tension: 0.3,
+        pointRadius: 4,
+        pointBackgroundColor: '#4ecdc4',
+        fill: true
+      }] },
+      options: {
+        animation: false,
+        plugins: { legend: { labels: { color: '#7878a0', font: { size: 11 } } } },
+        scales: {
+          x: { ticks: { color: '#7878a0', maxTicksLimit: 8 }, grid: { color: '#16163a' } },
+          y: { ticks: { color: '#7878a0' }, grid: { color: '#16163a' },
+               title: { display: true, text: d.unit, color: '#7878a0' } }
+        }
+      }
+    });
+  } catch(e){ console.error('loadWeightChart error:', e); }
+}
+
 async function clearLog(){
   if(!confirm('Clear all event log entries? This cannot be undone.')) return;
   await fetch('/api/log/clear', {method:'POST'});
@@ -1073,7 +1184,7 @@ async function loadChart(){
 
 refresh(); loadCamera(); loadChart(); loadWeather(); loadWeatherChart();
 loadFeedingItems(); loadCareItems(); loadSensorAverages(); loadCareStatus();
-loadGecko();
+loadGecko(); initWeightSection();
 setInterval(refresh, 30000);
 setInterval(loadCamera, 30000);
 setInterval(loadWeather, 600000);
@@ -1393,6 +1504,69 @@ def api_feeding_log():
     if _data_logger:
         _data_logger.log_system_event("feeding", msg)
     return jsonify({"ok": True, "message": msg})
+
+
+# ------------------------------------------------------------------
+# Weight tracking (canonical storage: grams; display in configured unit)
+# ------------------------------------------------------------------
+
+_OZ_PER_GRAM = 1 / 28.3495
+
+def _weight_unit() -> str:
+    unit = (_config.get("weight", "unit", fallback="g") if _config else "g").strip().lower()
+    return "oz" if unit == "oz" else "g"
+
+def _to_grams(value: float, unit: str) -> float:
+    return value / _OZ_PER_GRAM if unit == "oz" else value
+
+def _from_grams(grams: float, unit: str) -> float:
+    return grams * _OZ_PER_GRAM if unit == "oz" else grams
+
+
+@app.route("/api/weight/enabled")
+@_auth_required
+def api_weight_enabled():
+    enabled = (_config.getboolean("weight", "enabled", fallback=True)
+               if _config else True)
+    return jsonify({"enabled": enabled, "unit": _weight_unit()})
+
+
+@app.route("/api/weight/log", methods=["POST"])
+@_auth_required
+def api_weight_log():
+    if _config and not _config.getboolean("weight", "enabled", fallback=True):
+        return jsonify({"error": "weight tracking disabled"}), 403
+    data = request.get_json(silent=True) or {}
+    raw  = data.get("weight")
+    note = (data.get("note", "") or "").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid weight — must be a number"}), 400
+    if value <= 0:
+        return jsonify({"error": "weight must be positive"}), 400
+    unit = _weight_unit()
+    weight_g = _to_grams(value, unit)
+    if _data_logger:
+        _data_logger.log_weight(weight_g, note)
+        # Also log to the event log so it appears in /logs under care.
+        pretty = f"Weight: {value:.1f}{unit}"
+        if note:
+            pretty += f" — {note}"
+        _data_logger.log_system_event("care", pretty)
+    return jsonify({"ok": True, "message": f"{value:.1f}{unit}"})
+
+
+@app.route("/api/weight/history")
+@_auth_required
+def api_weight_history():
+    limit = request.args.get("limit", 500, type=int)
+    rows  = _data_logger.get_weight_readings(limit=limit) if _data_logger else []
+    unit  = _weight_unit()
+    for row in rows:
+        row["weight"]   = round(_from_grams(row["weight_g"], unit), 2)
+        row["ts_local"] = _utc_to_local(row["ts"])
+    return jsonify({"unit": unit, "readings": rows})
 
 
 @app.route("/api/log/clear", methods=["POST"])
