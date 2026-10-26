@@ -266,13 +266,28 @@ def build_mister(config: configparser.ConfigParser, data_logger=None,
     if not entity_id:
         logger.error("Mister: [mister].ha_entity_id is missing.")
         return None
+    runtime_s = cfg.getfloat("mister_runtime_seconds",       fallback=600)
+    delay_s   = cfg.getfloat("mister_monitor_delay_seconds", fallback=900)
+    cap       = cfg.getint  ("mister_max_runs_per_24h",      fallback=6)
+    # Diagnostic — helps catch config-key typos ("_minutes" instead of "_seconds").
+    logger.info("Mister configured: entity=%s runtime=%.0fs cooldown=%.0fs "
+                "cap=%d/24h auto=%s button=%s",
+                entity_id, runtime_s, delay_s, cap, auto, button)
+    # Warn loudly if the user still has the old *_minutes keys from before the
+    # HA migration — those are silently ignored now and the defaults kick in.
+    if cfg.get("mister_runtime_minutes",       fallback=None) is not None:
+        logger.warning("Mister: [mister].mister_runtime_minutes is IGNORED. "
+                       "Rename to mister_runtime_seconds (value = minutes × 60).")
+    if cfg.get("mister_monitor_delay_minutes", fallback=None) is not None:
+        logger.warning("Mister: [mister].mister_monitor_delay_minutes is IGNORED. "
+                       "Rename to mister_monitor_delay_seconds (value = minutes × 60).")
     return HARelay(
         name                  = "Mister",
         ha_client             = ha_client,
         entity_id             = entity_id,
-        runtime_seconds       = cfg.getfloat("mister_runtime_seconds",        fallback=600),
-        monitor_delay_seconds = cfg.getfloat("mister_monitor_delay_seconds",  fallback=900),
-        max_runs_per_24h      = cfg.getint  ("mister_max_runs_per_24h",       fallback=6),
+        runtime_seconds       = runtime_s,
+        monitor_delay_seconds = delay_s,
+        max_runs_per_24h      = cap,
         data_logger           = data_logger,
         auto_enabled          = auto,
         button_enabled        = button,
