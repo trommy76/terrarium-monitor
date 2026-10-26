@@ -170,6 +170,8 @@ class HARelay:
         self._is_on            = False
         self._lock             = threading.Lock()
         self._cooldown_until   = 0.0
+        # Relay to switch off before this one turns on (e.g. fan before mister).
+        self.stop_first        = None
 
     @property
     def is_on(self) -> bool:
@@ -212,6 +214,10 @@ class HARelay:
                     logger.warning("%s hit 24h run cap (%d/%d).",
                                    self.name, runs, self.max_runs_per_24h)
                     return False
+            other = self.stop_first
+            if other is not None and other.is_on:
+                logger.info("%s running – stopping before %s starts.", other.name, self.name)
+                other.force_off()
             if not self._send(True):
                 return False
             self._is_on = True

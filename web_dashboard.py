@@ -440,6 +440,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="topbar">
   <h1>🦎 {{ site_title }} <span style="font-size:.65rem;color:var(--grey);font-weight:400;margin-left:.4rem">v{{ app_version }}</span></h1>
   <div class="topbar-btns">
+    <button class="cfg-btn" id="updBtn" style="display:none;background:#c80" onclick="applyUpdate()"></button>
     <a href="/logs"><button class="cfg-btn" style="background:#444">📋 Logs</button></a>
     <a href="/config"><button class="cfg-btn">⚙️ Config</button></a>
     {% if auth_enabled %}<a href="/logout"><button class="off-btn">Logout</button></a>{% endif %}
@@ -908,6 +909,22 @@ async function stopPython(){
   try{ await fetch('/api/shutdown',{method:'POST'}); }catch(e){}
   btn.textContent='✅ Stopped';
 }
+async function checkUpdate(){
+  try{
+    const d = await (await fetch('/api/update/check')).json();
+    const b = document.getElementById('updBtn');
+    if(d.available && b){ b.textContent='⬆️ Update to v'+d.latest; b.style.display=''; b.dataset.v=d.latest; }
+  }catch(e){}
+}
+async function applyUpdate(){
+  const b=document.getElementById('updBtn');
+  if(!confirm('Update to v'+b.dataset.v+'? The app will restart.')) return;
+  b.textContent='⏳ Updating...'; b.disabled=true;
+  const d = await (await fetch('/api/update/apply',{method:'POST'})).json();
+  if(d.ok){ b.textContent='✅ Restarting...'; setTimeout(()=>location.reload(),8000); }
+  else { alert('Update failed: '+d.error); b.textContent='⬆️ Retry update'; b.disabled=false; }
+}
+checkUpdate();
 async function loadCareItems(){
   try {
     const r = await fetch('/api/care/items');
@@ -2156,6 +2173,24 @@ def api_pushover_test():
         return jsonify({"ok": False, "message": "Notifier not initialised."}), 500
     ok, msg = _notifier.test()
     return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/update/check")
+@_auth_required
+def api_update_check():
+    import updater
+    return jsonify(updater.check(force=request.args.get("force") == "1"))
+
+
+@app.route("/api/update/apply", methods=["POST"])
+@_auth_required
+def api_update_apply():
+    import os, signal, threading, updater
+    result = updater.apply()
+    if result.get("ok"):
+        # systemd (Restart=always) relaunches the new code.
+        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    return jsonify(result)
 
 
 @app.route("/api/shutdown", methods=["POST"])

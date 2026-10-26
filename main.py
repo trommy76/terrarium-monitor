@@ -58,6 +58,8 @@ def build_subsystems(cfg: configparser.ConfigParser) -> dict:
     sensors  = SensorManager(cfg)
     mister   = build_mister(cfg, dl, ha_client=ha)
     fan      = build_fan(cfg, dl)
+    if mister and fan:
+        mister.stop_first = fan   # fans stop before the mister fires
     lighting = LightingController(cfg, data_logger=dl)
     camera   = CameraManager(cfg)
     weather  = WeatherManager(cfg, data_logger=dl)
